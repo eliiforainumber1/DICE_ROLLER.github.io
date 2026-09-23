@@ -62,7 +62,26 @@
     font-size:0.85rem;
     font-family:-apple-system,"Segoe UI",sans-serif;
   }
-  .quickroll{display:flex;gap:6px;flex-wrap:wrap;}
+  .quickroll{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end;}
+  .header-right{display:flex;flex-direction:column;align-items:flex-end;gap:10px;}
+  .char-tabs{display:flex;flex-wrap:wrap;gap:4px;justify-content:flex-end;max-width:340px;}
+  .char-tab{
+    font-family:-apple-system,"Segoe UI",sans-serif;
+    font-size:0.68rem;font-weight:700;color:#fff;
+    padding:7px 10px;border:none;border-radius:7px 7px 3px 3px;
+    cursor:pointer;opacity:0.68;letter-spacing:0.01em;
+    text-shadow:0 1px 1px rgba(0,0,0,0.35);
+    box-shadow:0 1px 2px rgba(0,0,0,0.18);
+    transition:opacity .12s ease, transform .12s ease;
+  }
+  .char-tab:hover{opacity:0.88;}
+  .char-tab.active{opacity:1;transform:translateY(-2px);box-shadow:0 3px 6px rgba(0,0,0,0.28);}
+  .char-tab-rename{
+    font-family:-apple-system,"Segoe UI",sans-serif;
+    font-size:0.68rem;font-weight:700;color:#fff;
+    padding:6px 9px;border:1px solid rgba(255,255,255,0.65);border-radius:7px 7px 3px 3px;
+    outline:none;width:88px;text-shadow:0 1px 1px rgba(0,0,0,0.3);
+  }
   .die-btn{
     font-family:-apple-system,"Segoe UI",sans-serif;
     font-size:0.85rem;
@@ -268,7 +287,10 @@
       <h1>Roll Tracker</h1>
       <p>Ability checks, saving throws, and attacks — works fully offline.</p>
     </div>
-    <div class="quickroll" id="quickroll"></div>
+    <div class="header-right">
+      <div class="char-tabs" id="char-tabs"></div>
+      <div class="quickroll" id="quickroll"></div>
+    </div>
   </header>
 
   <div class="settings-bar">
@@ -313,7 +335,10 @@
 (function(){
   "use strict";
 
-  var STORAGE_KEY = "roll-tracker-state-v1";
+  var STORAGE_KEY = "roll-tracker-app-v2";
+  var OLD_STORAGE_KEY = "roll-tracker-state-v1";
+
+  var TAB_COLORS = ["#b5533f","#c98a3d","#b99a2e","#6f9c4c","#4b8f77","#3f8f96","#4f7cae","#7c6bab","#b05a8c"];
 
   var PRESETS = {
     custom: {label:"Custom", name:"New Attack", dice:"1d6", note:"", noAttackRoll:false, ability:null},
@@ -325,24 +350,23 @@
   };
   var PRESET_ORDER = ["custom","crossbow","scimitar","thornwhip","poisonspray","dagger"];
 
-  var defaultState = {
-    profBonus: 2,
-    mode: "normal",
-    abilities: [
-      {name:"STR", mod:0, save:false},
-      {name:"DEX", mod:0, save:false},
-      {name:"CON", mod:0, save:false},
-      {name:"INT", mod:0, save:false},
-      {name:"WIS", mod:0, save:false},
-      {name:"CHA", mod:0, save:false}
-    ],
-    skills: [
+  var blankAbilities = [
+    {name:"STR", mod:0, save:false},
+    {name:"DEX", mod:0, save:false},
+    {name:"CON", mod:0, save:false},
+    {name:"INT", mod:0, save:false},
+    {name:"WIS", mod:0, save:false},
+    {name:"CHA", mod:0, save:false}
+  ];
+
+  function blankSkillList(){
+    return [
       {name:"Athletics", ability:"STR", prof:false, expertise:false},
       {name:"Acrobatics", ability:"DEX", prof:false, expertise:false},
       {name:"Sleight of Hand", ability:"DEX", prof:false, expertise:false},
       {name:"Stealth", ability:"DEX", prof:false, expertise:false},
       {name:"Arcana", ability:"INT", prof:false, expertise:false},
-      {name:"History", ability:"INT", prof:true, expertise:false},
+      {name:"History", ability:"INT", prof:false, expertise:false},
       {name:"Investigation", ability:"INT", prof:false, expertise:false},
       {name:"Nature", ability:"INT", prof:false, expertise:false},
       {name:"Religion", ability:"INT", prof:false, expertise:false},
@@ -354,8 +378,19 @@
       {name:"Deception", ability:"CHA", prof:false, expertise:false},
       {name:"Intimidation", ability:"CHA", prof:false, expertise:false},
       {name:"Performance", ability:"CHA", prof:false, expertise:false},
-      {name:"Persuasion", ability:"CHA", prof:true, expertise:false}
-    ],
+      {name:"Persuasion", ability:"CHA", prof:false, expertise:false}
+    ];
+  }
+
+  var fullTemplate = {
+    profBonus: 2,
+    mode: "normal",
+    abilities: JSON.parse(JSON.stringify(blankAbilities)),
+    skills: (function(){
+      var s = blankSkillList();
+      s.forEach(function(sk){ if(sk.name==="History"||sk.name==="Persuasion") sk.prof = true; });
+      return s;
+    })(),
     attacks: [
       {preset:"scimitar", name:"Scimitar", atk:4, dice:"1d6", dmgBonus:0}
     ],
@@ -378,25 +413,80 @@
     log: []
   };
 
-  var state = loadState();
-  if(!state.proficiencies) state.proficiencies = defaultState.proficiencies.slice();
-  if(!state.skills) state.skills = JSON.parse(JSON.stringify(defaultState.skills));
-  state.skills.forEach(function(sk){ if(typeof sk.expertise === "undefined") sk.expertise = false; });
+  var blankTemplate = {
+    profBonus: 2,
+    mode: "normal",
+    abilities: JSON.parse(JSON.stringify(blankAbilities)),
+    skills: blankSkillList(),
+    attacks: [
+      {preset:"custom", name:"New Attack", atk:0, dice:"1d6", dmgBonus:0}
+    ],
+    proficiencies: [],
+    log: []
+  };
 
-  function loadState(){
+  function buildCharacter(name, color, template){
+    var c = JSON.parse(JSON.stringify(template));
+    c.name = name;
+    c.color = color;
+    return c;
+  }
+
+  function buildDefaultApp(){
+    var chars = [ buildCharacter("Player 1", TAB_COLORS[0], fullTemplate) ];
+    for(var i=1;i<9;i++){
+      chars.push(buildCharacter("Player " + (i+1), TAB_COLORS[i], blankTemplate));
+    }
+    return { activeIndex: 0, characters: chars };
+  }
+
+  function loadApp(){
     try{
       var raw = localStorage.getItem(STORAGE_KEY);
       if(raw){
         var parsed = JSON.parse(raw);
-        if(parsed && parsed.abilities && parsed.attacks) return parsed;
+        if(parsed && Array.isArray(parsed.characters) && parsed.characters.length){
+          return parsed;
+        }
+      }
+      // Migrate a save from before multi-character tabs existed, if present.
+      var oldRaw = localStorage.getItem(OLD_STORAGE_KEY);
+      if(oldRaw){
+        var oldParsed = JSON.parse(oldRaw);
+        if(oldParsed && oldParsed.abilities && oldParsed.attacks){
+          var migrated = buildDefaultApp();
+          oldParsed.name = "Player 1";
+          oldParsed.color = TAB_COLORS[0];
+          migrated.characters[0] = oldParsed;
+          return migrated;
+        }
       }
     }catch(e){ /* offline/local file storage may be unavailable; fall back to defaults */ }
-    return JSON.parse(JSON.stringify(defaultState));
+    return buildDefaultApp();
   }
+
+  var app = loadApp();
+  app.characters.forEach(function(c, i){
+    if(!c.name) c.name = "Player " + (i+1);
+    if(!c.color) c.color = TAB_COLORS[i % TAB_COLORS.length];
+    if(!c.proficiencies) c.proficiencies = [];
+    if(!c.skills) c.skills = blankSkillList();
+    c.skills.forEach(function(sk){ if(typeof sk.expertise === "undefined") sk.expertise = false; });
+    if(!c.abilities) c.abilities = JSON.parse(JSON.stringify(blankAbilities));
+    if(!c.attacks) c.attacks = [];
+    if(!c.log) c.log = [];
+    if(typeof c.profBonus === "undefined") c.profBonus = 2;
+    if(!c.mode) c.mode = "normal";
+  });
+  if(typeof app.activeIndex !== "number" || app.activeIndex < 0 || app.activeIndex >= app.characters.length){
+    app.activeIndex = 0;
+  }
+
+  var state = app.characters[app.activeIndex];
 
   function saveState(){
     try{
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(app));
     }catch(e){ /* ignore — rolling still works without persistence */ }
   }
 
@@ -512,9 +602,68 @@
     qr.appendChild(btn);
   });
 
+  // ---------- Character Tabs ----------
+  var tabsEl = document.getElementById("char-tabs");
+
+  function renderTabs(){
+    tabsEl.innerHTML = "";
+    app.characters.forEach(function(char, i){
+      var btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "char-tab" + (i === app.activeIndex ? " active" : "");
+      btn.style.background = char.color;
+      btn.textContent = char.name;
+      btn.title = "Click to switch — double-click to rename";
+      btn.addEventListener("click", function(){
+        if(i !== app.activeIndex) switchTab(i);
+      });
+      btn.addEventListener("dblclick", function(e){
+        e.stopPropagation();
+        startRename(btn, i);
+      });
+      tabsEl.appendChild(btn);
+    });
+  }
+
+  function startRename(btn, i){
+    var input = document.createElement("input");
+    input.type = "text";
+    input.className = "char-tab-rename";
+    input.value = app.characters[i].name;
+    input.style.background = app.characters[i].color;
+    btn.replaceWith(input);
+    input.focus();
+    input.select();
+    var committed = false;
+    function commit(){
+      if(committed) return;
+      committed = true;
+      var val = input.value.trim();
+      if(val) app.characters[i].name = val;
+      saveState();
+      renderTabs();
+    }
+    input.addEventListener("blur", commit);
+    input.addEventListener("keydown", function(e){
+      if(e.key === "Enter") input.blur();
+      if(e.key === "Escape"){ committed = true; renderTabs(); }
+    });
+  }
+
+  function switchTab(i){
+    app.activeIndex = i;
+    state = app.characters[i];
+    saveState();
+    renderTabs();
+    renderSettingsBar();
+    renderAbilities();
+    renderAttacks();
+    renderLog();
+    renderProficiencies();
+  }
+
   // ---------- Settings ----------
   var profInput = document.getElementById("prof-bonus");
-  profInput.value = state.profBonus;
   profInput.addEventListener("input", function(){
     state.profBonus = parseInt(profInput.value,10) || 0;
     saveState();
@@ -523,15 +672,19 @@
 
   var modeGroup = document.getElementById("mode-group");
   Array.prototype.forEach.call(modeGroup.querySelectorAll("button"), function(btn){
-    if(btn.getAttribute("data-mode") === state.mode) setActiveMode(btn);
     btn.addEventListener("click", function(){
       state.mode = btn.getAttribute("data-mode");
       saveState();
-      Array.prototype.forEach.call(modeGroup.querySelectorAll("button"), function(b){b.classList.remove("active");});
-      setActiveMode(btn);
+      renderSettingsBar();
     });
   });
-  function setActiveMode(btn){btn.classList.add("active");}
+
+  function renderSettingsBar(){
+    profInput.value = state.profBonus;
+    Array.prototype.forEach.call(modeGroup.querySelectorAll("button"), function(b){
+      b.classList.toggle("active", b.getAttribute("data-mode") === state.mode);
+    });
+  }
 
   // ---------- Abilities ----------
   var abilitiesEl = document.getElementById("abilities");
@@ -895,6 +1048,8 @@
     if(inputs.length) inputs[inputs.length-1].focus();
   });
 
+  renderTabs();
+  renderSettingsBar();
   renderAbilities();
   renderAttacks();
   renderLog();
